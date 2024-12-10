@@ -1,0 +1,128 @@
+#pragma kernel SpawnPoints
+
+struct Vertex
+{
+    float3 position;
+    float3 normal;
+    float2 uv;
+};
+
+struct RaycastPoint
+{
+    float3 position;
+    float3 direction;
+};
+
+StructuredBuffer<Vertex> Vertices;
+StructuredBuffer<int> Indices;
+
+RWStructuredBuffer<RaycastPoint> OutPoints;
+
+int IndexBufferLength;
+int ImageResolution;
+
+float Sign(float2 p1, float2 p2, float2 p3)
+{
+    return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+}
+
+bool PointInTriangle(
+    float2 pt,
+    float2 v1,
+    float2 v2,
+    float2 v3)
+{
+    float d1, d2, d3;
+    bool hasNeg, hasPos;
+
+    d1 = Sign(pt, v1, v2);
+    d2 = Sign(pt, v2, v3);
+    d3 = Sign(pt, v3, v1);
+
+    hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+    return !(hasNeg && hasPos);
+}
+
+float3 GetBarycentricCoords(
+    float2 pt,
+    float2 a,
+    float2 b,
+    float2 c)
+{
+    float2 v0 = b - a, v1 = c - a, v2 = pt - a;
+
+    float d00 = dot(v0, v0);
+    float d01 = dot(v0, v1);
+    float d11 = dot(v1, v1);
+    float d20 = dot(v2, v0);
+    float d21 = dot(v2, v1);
+
+    float denom = d00 * d11 - d01 * d01;
+
+    float v = (d11 * d20 - d01 * d21) / denom;
+    float w = (d00 * d21 - d01 * d20) / denom;
+    float u = 1.0 - v - w;
+
+    return float3(u, v, w);
+}
+
+float3 InterpFromBarycentricCoords(
+    float3 bary,
+    float3 v1,
+    float3 v2,
+    float3 v3)
+{
+    float x = (bary.x * v1.x) + (bary.y * v2.x) + (bary.z * v3.x);
+    float y = (bary.x * v1.y) + (bary.y * v2.y) + (bary.z * v3.y);
+    float z = (bary.x * v1.z) + (bary.y * v2.z) + (bary.z * v3.z);
+
+    return float3(x, y, z);
+}
+
+[numthreads(8,8,1)]
+void SpawnPoints (uint3 id : SV_DispatchThreadID, uint threadIndex : SV_GroupIndex)
+{
+    double x = (1.0 / ImageResolution) * id.x;
+    double y = (1.0 / ImageResolution) * id.y;
+
+    for (int i = 0; i < IndexBufferLength; i += 3)
+    {
+        Vertex v0 = Vertices[Indices[i]];
+        Vertex v1 = Vertices[Indices[i + 1]];
+        Vertex v2 = Vertices[Indices[i + 2]];
+        
+        if (PointInTriangle(
+            float2(x, y),
+            v0.uv,
+            v1.uv,
+            v2.uv))
+        {
+            float3 bary = GetBarycentricCoords(
+                float2(x, y),
+                v0.uv,
+                v1.uv,
+                v2.uv
+            );
+            
+            RaycastPoint pt;
+
+            pt.position = InterpFromBarycentricCoords(
+                bary,
+                v0.position,
+                v1.position,
+                v2.position
+            );
+            
+            pt.direction = InterpFromBarycentricCoords(
+                bary,
+                v0.normal,
+                v1.normal,
+                v2.normal
+            );
+
+            OutPoints[id.x * id.y] = pt;
+        }
+    }
+}

@@ -1,0 +1,66 @@
+#include "UnityShaderVariables.cginc"
+#include "UnityRaytracingMeshUtils.cginc"
+#include "RayPayload.hlsl"
+
+#pragma max_recursion_depth 1
+
+// Input
+RaytracingAccelerationStructure _SceneAccelStruct;
+float _Zoom;
+int _ImageSize;
+
+struct RaycastPoint
+{
+    float3 position;
+    float3 direction;
+};
+StructuredBuffer<RaycastPoint> RaycastPoints;
+
+// Output
+RWTexture2D<float4> RenderTarget;
+
+struct AttributeData
+{
+	// Barycentric value of the intersection
+	float2 barycentrics;
+};
+
+[shader("miss")]
+void MainMissShader(inout RayPayload payload : SV_RayPayload)
+{
+    payload.color = float4(0.05F, 0.05F, 0.05F, 1.0F);
+};
+
+[shader("raygeneration")]
+void MyRaygenShader()
+{
+    uint2 launchIndex = DispatchRaysIndex().xy;
+    uint2 launchDim = DispatchRaysDimensions().xy;
+    
+    float2 frameCoord = float2(launchIndex.x, launchDim.y - launchIndex.y - 1) + float2(0.5, 0.5);
+    float2 ndcCoords = frameCoord / float2(launchDim.x - 1, launchDim.y - 1);
+    
+    ndcCoords = ndcCoords * 2 - float2(1, 1);
+    ndcCoords = ndcCoords * _Zoom;
+
+    float aspectRatio = (float)launchDim.x / (float)launchDim.y;
+    
+    float3 viewDirection = normalize(float3(ndcCoords.x * aspectRatio, ndcCoords.y, 1));
+    float3 rayDirection = normalize(mul((float3x3)unity_CameraToWorld, viewDirection));
+
+    int index = launchIndex.y * _ImageSize + launchIndex.x;
+    
+    RayDesc ray;
+    ray.Origin    = RaycastPoints[index].position;
+    ray.Direction = normalize(RaycastPoints[index].direction);
+    ray.TMin      = 0.0f;
+    ray.TMax      = 1000.0f;
+    
+    RayPayload payload;
+    payload.color = float4(1, 1, 1, 1);
+    
+    uint missShaderIndex = 0;
+    TraceRay(_SceneAccelStruct, 0, 0xFF, 0, 1, missShaderIndex, ray, payload);
+    
+    RenderTarget[frameCoord] = payload.color;
+}
